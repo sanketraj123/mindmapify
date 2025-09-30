@@ -53,10 +53,18 @@ def get_available_model():
             return None
         
         # Show available models for debugging
-        st.info(f"Available models: {', '.join(available_models[:5])}")
+        with st.expander("🔍 View Available Models"):
+            st.write(', '.join(available_models[:10]))
         
-        # Preferred models to try (without 'models/' prefix as it's already in the name)
-        preferred_keywords = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        # Preferred models to try (prioritize flash models for lower quota usage)
+        preferred_keywords = [
+            'gemini-2.5-flash',
+            'gemini-1.5-flash', 
+            'gemini-2.5-flash-lite',
+            'gemini-1.5-pro',
+            'gemini-2.5-pro',
+            'gemini-pro'
+        ]
         
         for keyword in preferred_keywords:
             for model_name in available_models:
@@ -129,8 +137,26 @@ def create_mindmap_markdown(text):
         return response.text.strip()
         
     except Exception as e:
-        st.error(f"Error generating mindmap: {str(e)}")
-        st.info("Try checking your API key permissions or quota limits at https://makersuite.google.com/app/apikey")
+        error_message = str(e)
+        
+        # Check for quota errors
+        if "429" in error_message or "quota" in error_message.lower():
+            st.error("⚠️ **API Quota Exceeded**")
+            st.warning("""
+            You've reached your free tier limit (50 requests/day for gemini-pro models).
+            
+            **Solutions:**
+            1. ⏰ Wait ~41 seconds and try again (or wait until tomorrow for quota reset)
+            2. 🆓 Use 'Simple Generator (no API needed)' option in the sidebar
+            3. 💳 Upgrade your API plan at https://makersuite.google.com/app/apikey
+            4. 🔑 Try a different API key if you have one
+            
+            **Note:** gemini-flash models use less quota than gemini-pro models
+            """)
+        else:
+            st.error(f"Error generating mindmap: {error_message}")
+            st.info("Try checking your API key permissions or quota limits at https://makersuite.google.com/app/apikey")
+        
         return None
 
 def create_markmap_html(markdown_content):
@@ -221,6 +247,9 @@ def main():
         
         if api_choice == "Google Generative AI (requires key)":
             api_key = st.text_input("Enter your Google API Key:", type="password", value=API_KEY)
+            st.info("💡 **Tip:** Free tier has 50 requests/day limit. Use gemini-flash models to conserve quota!")
+        else:
+            st.success("✅ No API key needed - generating basic mindmap from text structure")
            
 
     # Main app layout
