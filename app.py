@@ -1,25 +1,25 @@
 import streamlit as st
-import google.generativeai as genai
+from groq import Groq
 from PyPDF2 import PdfReader
 import streamlit.components.v1 as components
 import os
 from dotenv import load_dotenv
 load_dotenv()
 
-# Define the API key directly in the code
-API_KEY = os.getenv("GOOGLE_API_KEY")
+# Define the API key
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-def configure_genai():
-    """Configure the Gemini AI with the API key."""
-    if not API_KEY:
-        st.error("API Key is missing. Please provide a valid Google API key.")
-        return False
+def configure_groq():
+    """Configure the Groq AI with the API key."""
+    if not GROQ_API_KEY:
+        st.error("API Key is missing. Please provide a valid Groq API key.")
+        return None
     try:
-        genai.configure(api_key=API_KEY)
-        return True
+        client = Groq(api_key=GROQ_API_KEY)
+        return client
     except Exception as e:
-        st.error(f"Error configuring Google API: {str(e)}")
-        return False
+        st.error(f"Error configuring Groq API: {str(e)}")
+        return None
 
 def extract_text_from_pdf(pdf_file):
     """Extract text from uploaded PDF file."""
@@ -28,7 +28,7 @@ def extract_text_from_pdf(pdf_file):
         text = ""
         for page in pdf_reader.pages:
             page_text = page.extract_text()
-            if page_text:  # Only add non-empty pages
+            if page_text:
                 text += page_text + "\n"
         if not text.strip():
             st.warning("No text could be extracted from the PDF. Please ensure it's not scanned or image-based.")
@@ -38,124 +38,71 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return None
 
-def get_available_model():
-    """Get the first available generative model from the API."""
+def create_mindmap_markdown(text, client):
+    """Generate mindmap markdown using Groq AI."""
     try:
-        models = genai.list_models()
-        available_models = []
-        
-        for model in models:
-            if 'generateContent' in model.supported_generation_methods:
-                available_models.append(model.name)
-        
-        if not available_models:
-            st.error("No suitable generative models found in your account.")
-            return None
-        
-        # Show available models for debugging
-        with st.expander("🔍 View Available Models"):
-            st.write(', '.join(available_models[:10]))
-        
-        # Preferred models to try (prioritize flash models for lower quota usage)
-        preferred_keywords = [
-            'gemini-2.5-flash',
-            'gemini-1.5-flash', 
-            'gemini-2.5-flash-lite',
-            'gemini-1.5-pro',
-            'gemini-2.5-pro',
-            'gemini-pro'
-        ]
-        
-        for keyword in preferred_keywords:
-            for model_name in available_models:
-                if keyword in model_name.lower():
-                    return model_name
-        
-        # If no preferred model found, return the first available one
-        return available_models[0]
-        
-    except Exception as e:
-        st.error(f"Error listing models: {str(e)}")
-        return None
-
-def create_mindmap_markdown(text):
-    """Generate mindmap markdown using Gemini AI."""
-    try:
-        # Get available model dynamically
-        model_name = get_available_model()
-        
-        if not model_name:
-            return None
-        
-        st.success(f"✅ Using model: {model_name}")
-        model = genai.GenerativeModel(model_name)
-        
+        # Truncate text if too long
         max_chars = 30000
         if len(text) > max_chars:
             text = text[:max_chars] + "..."
             st.warning(f"Text was truncated to {max_chars} characters due to length limitations.")
         
-        prompt = f"""
-        Create a hierarchical markdown mindmap from the following text. 
-        Use proper markdown heading syntax (# for main topics, ## for subtopics, ### for details).
-        Focus on the main concepts and their relationships.
-        Include relevant details and connections between ideas.
-        Keep the structure clean and organized.
-        
-        Format the output exactly like this example:
-        # Main Topic
-        ## Subtopic 1
-        ### Detail 1
-        - Key point 1
-        - Key point 2
-        ### Detail 2
-        ## Subtopic 2
-        ### Detail 3
-        ### Detail 4
-        
-        Text to analyze: {text}
-        
-        Respond only with the markdown mindmap, no additional text.
-        """
-        
-        generation_config = {
-            "temperature": 0.2,
-            "top_p": 0.95,
-            "top_k": 40,
-            "max_output_tokens": 8192,
-        }
-        
-        response = model.generate_content(
-            prompt,
-            generation_config=generation_config
+        prompt = f"""Create a hierarchical markdown mindmap from the following text. 
+Use proper markdown heading syntax (# for main topics, ## for subtopics, ### for details).
+Focus on the main concepts and their relationships.
+Include relevant details and connections between ideas.
+Keep the structure clean and organized.
+
+Format the output exactly like this example:
+# Main Topic
+## Subtopic 1
+### Detail 1
+- Key point 1
+- Key point 2
+### Detail 2
+## Subtopic 2
+### Detail 3
+### Detail 4
+
+Text to analyze:
+{text}
+
+Respond only with the markdown mindmap, no additional text."""
+
+        # Use llama-3.3-70b-versatile model (fast and high quality)
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "user",
+                    "content": prompt,
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.2,
+            max_tokens=8000,
         )
         
-        if not response or not response.text or not response.text.strip():
-            st.error("Received empty response from Gemini AI")
+        if not chat_completion.choices or not chat_completion.choices[0].message.content:
+            st.error("Received empty response from Groq AI")
             return None
             
-        return response.text.strip()
+        return chat_completion.choices[0].message.content.strip()
         
     except Exception as e:
         error_message = str(e)
         
-        # Check for quota errors
-        if "429" in error_message or "quota" in error_message.lower():
-            st.error("⚠️ **API Quota Exceeded**")
+        if "rate_limit" in error_message.lower() or "429" in error_message:
+            st.error("⚠️ **API Rate Limit Exceeded**")
             st.warning("""
-            You've reached your free tier limit (50 requests/day for gemini-pro models).
+            You've hit the rate limit. Groq has generous free tier limits:
             
             **Solutions:**
-            1. ⏰ Wait ~41 seconds and try again (or wait until tomorrow for quota reset)
-            2. 🆓 Use 'Simple Generator (no API needed)' option in the sidebar
-            3. 💳 Upgrade your API plan at https://makersuite.google.com/app/apikey
-            4. 🔑 Try a different API key if you have one
-            
-            **Note:** gemini-flash models use less quota than gemini-pro models
+            1. ⏰ Wait a moment and try again
+            2. 🆓 Use 'Simple Generator (no API needed)' option
+            3. 🔑 Check your usage at https://console.groq.com
             """)
         else:
             st.error(f"Error generating mindmap: {error_message}")
-            st.info("Try checking your API key permissions or quota limits at https://makersuite.google.com/app/apikey")
         
         return None
 
@@ -214,15 +161,12 @@ def create_markmap_html(markdown_content):
 
 def generate_simple_mindmap(text):
     """Generate a simple mindmap markdown as a fallback."""
-    # Try to create a basic structure from the text
     lines = text.split('\n')
     mindmap = "# Document Summary\n\n"
     
-    # Get first few non-empty lines as sections
     sections = [line.strip() for line in lines[:10] if line.strip() and len(line.strip()) > 20]
     
     for i, section in enumerate(sections[:5]):
-        # Truncate long lines
         if len(section) > 100:
             section = section[:100] + "..."
         mindmap += f"## Section {i+1}\n- {section}\n\n"
@@ -243,21 +187,17 @@ def main():
         st.write("3️⃣ View interactive mindmap 📊")
         st.markdown("---")
         
-        api_choice = st.radio("Select AI Provider:", ["Google Generative AI (requires key)", "Simple Generator (no API needed)"])
+        api_choice = st.radio("Select AI Provider:", ["Groq AI (fast & generous free tier)", "Simple Generator (no API needed)"])
         
-        if api_choice == "Google Generative AI (requires key)":
-            api_key = st.text_input("Enter your Google API Key:", type="password", value=API_KEY)
-            st.info("💡 **Tip:** Free tier has 50 requests/day limit. Use gemini-flash models to conserve quota!")
+        if api_choice == "Groq AI (fast & generous free tier)":
+            api_key = st.text_input("Enter your Groq API Key:", type="password", value=GROQ_API_KEY)
+            st.info("💡 **Using Llama 3.3 70B** - Fast and powerful!")
+            st.caption("Get your free API key at: https://console.groq.com")
         else:
-            st.success("✅ No API key needed - generating basic mindmap from text structure")
-           
+            st.success("✅ No API key needed - generating basic mindmap")
 
     # Main app layout
     st.title("📚 Mindmapify - PDF to AI-Powered Mindmap")
-
-    # Configure Google AI
-    if api_choice == "Google Generative AI (requires key)" and not configure_genai():
-        return
 
     # File upload
     uploaded_file = st.file_uploader("📂 Upload a PDF file", type="pdf")
@@ -268,11 +208,16 @@ def main():
             if text:
                 st.success(f"✅ Successfully extracted {len(text)} characters from PDF")
                 
-                # Generate mindmap content based on selected method
-                if api_choice == "Google Generative AI (requires key)" and API_KEY:
-                    markdown_content = create_mindmap_markdown(text)
-                    if not markdown_content:
-                        st.warning("AI generation failed. Falling back to simple generator.")
+                # Generate mindmap content
+                if api_choice == "Groq AI (fast & generous free tier)":
+                    client = configure_groq()
+                    if client:
+                        with st.spinner("🤖 Generating AI-powered mindmap..."):
+                            markdown_content = create_mindmap_markdown(text, client)
+                        if not markdown_content:
+                            st.warning("AI generation failed. Falling back to simple generator.")
+                            markdown_content = generate_simple_mindmap(text)
+                    else:
                         markdown_content = generate_simple_mindmap(text)
                 else:
                     markdown_content = generate_simple_mindmap(text)
