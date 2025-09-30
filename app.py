@@ -38,47 +38,48 @@ def extract_text_from_pdf(pdf_file):
         st.error(f"Error reading PDF: {str(e)}")
         return None
 
-# def get_available_model():
-#     """Get the first available text model from the API."""
-#     try:
-#         models = genai.list_models()
-#         available_models = [model.name for model in models if 'generateContent' in model.supported_generation_methods]
+def get_available_model():
+    """Get the first available generative model from the API."""
+    try:
+        models = genai.list_models()
+        available_models = []
         
-#         if not available_models:
-#             st.error("No suitable generative models found in your account.")
-#             return None
-            
-#         # For debugging - show available models
-#         st.info(f"Available models: {', '.join(available_models)}")
+        for model in models:
+            if 'generateContent' in model.supported_generation_methods:
+                available_models.append(model.name)
         
-#         # Try to find a Gemini model in the available models
-#         preferred_models = [
-#             'gemini-1.5-pro',
-#             'gemini-1.5-flash',
-#             'gemini-pro',
-#             'gemini-pro-vision'
-#         ]
+        if not available_models:
+            st.error("No suitable generative models found in your account.")
+            return None
         
-#         for model_name in preferred_models:
-#             for available_model in available_models:
-#                 if model_name in available_model:
-#                     return model_name
-                    
-#         # If no preferred model is found, use the first available one
-#         return available_models[0]
-#     except Exception as e:
-#         st.error(f"Error listing models: {str(e)}")
-#         return None
+        # Show available models for debugging
+        st.info(f"Available models: {', '.join(available_models[:5])}")
+        
+        # Preferred models to try (without 'models/' prefix as it's already in the name)
+        preferred_keywords = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-pro']
+        
+        for keyword in preferred_keywords:
+            for model_name in available_models:
+                if keyword in model_name.lower():
+                    return model_name
+        
+        # If no preferred model found, return the first available one
+        return available_models[0]
+        
+    except Exception as e:
+        st.error(f"Error listing models: {str(e)}")
+        return None
 
 def create_mindmap_markdown(text):
     """Generate mindmap markdown using Gemini AI."""
     try:
-        model_name = "gemini-1.5-flash"
+        # Get available model dynamically
+        model_name = get_available_model()
         
         if not model_name:
             return None
-            
-        st.info(f"Using model: {model_name}")
+        
+        st.success(f"✅ Using model: {model_name}")
         model = genai.GenerativeModel(model_name)
         
         max_chars = 30000
@@ -86,7 +87,7 @@ def create_mindmap_markdown(text):
             text = text[:max_chars] + "..."
             st.warning(f"Text was truncated to {max_chars} characters due to length limitations.")
         
-        prompt = """
+        prompt = f"""
         Create a hierarchical markdown mindmap from the following text. 
         Use proper markdown heading syntax (# for main topics, ## for subtopics, ### for details).
         Focus on the main concepts and their relationships.
@@ -109,25 +110,6 @@ def create_mindmap_markdown(text):
         Respond only with the markdown mindmap, no additional text.
         """
         
-        safety_settings = [
-            {
-                "category": "HARM_CATEGORY_HARASSMENT",
-                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-                "category": "HARM_CATEGORY_HATE_SPEECH",
-                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-                "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
-                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-            },
-            {
-                "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
-                "threshold": "BLOCK_MEDIUM_AND_ABOVE"
-            }
-        ]
-        
         generation_config = {
             "temperature": 0.2,
             "top_p": 0.95,
@@ -136,18 +118,19 @@ def create_mindmap_markdown(text):
         }
         
         response = model.generate_content(
-            prompt.format(text=text),
-            safety_settings=safety_settings,
+            prompt,
             generation_config=generation_config
         )
         
-        if not response.text or not response.text.strip():
+        if not response or not response.text or not response.text.strip():
             st.error("Received empty response from Gemini AI")
             return None
             
         return response.text.strip()
+        
     except Exception as e:
         st.error(f"Error generating mindmap: {str(e)}")
+        st.info("Try checking your API key permissions or quota limits at https://makersuite.google.com/app/apikey")
         return None
 
 def create_markmap_html(markdown_content):
@@ -202,6 +185,23 @@ def create_markmap_html(markdown_content):
     </html>
     """
     return html_content
+
+def generate_simple_mindmap(text):
+    """Generate a simple mindmap markdown as a fallback."""
+    # Try to create a basic structure from the text
+    lines = text.split('\n')
+    mindmap = "# Document Summary\n\n"
+    
+    # Get first few non-empty lines as sections
+    sections = [line.strip() for line in lines[:10] if line.strip() and len(line.strip()) > 20]
+    
+    for i, section in enumerate(sections[:5]):
+        # Truncate long lines
+        if len(section) > 100:
+            section = section[:100] + "..."
+        mindmap += f"## Section {i+1}\n- {section}\n\n"
+    
+    return mindmap
 
 def main():
     st.set_page_config(page_title="Mindmapify - AI-Powered Mindmaps", layout="wide")
@@ -259,10 +259,6 @@ def main():
                         st.text_area("📝 Markdown Format", markdown_content, height=400)
                         st.download_button("⬇ Download Markdown", data=markdown_content, file_name="mindmap.md", mime="text/markdown")
                         st.download_button("⬇ Download HTML Mindmap", data=html_content, file_name="mindmap.html", mime="text/html")
-
-def generate_simple_mindmap(text):
-    """Generate a simple mindmap markdown as a fallback."""
-    return f"# Main Topic\n## Subtopic 1\n### Detail 1\n- Key point 1\n- Key point 2\n## Subtopic 2\n### Detail 2"
 
 if __name__ == "__main__":
     main()
